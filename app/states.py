@@ -6,6 +6,7 @@ class AddAnimeStates(StatesGroup):
     waiting_title = State()
     waiting_description = State()
     waiting_title_photo = State()
+    waiting_status = State()
     waiting_media = State()
 
 

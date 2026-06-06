@@ -33,6 +33,7 @@ class Database:
                 anime_id INTEGER PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT,
+                status TEXT NOT NULL DEFAULT 'ongoing',
                 title_photo_message_id INTEGER,
                 episodes_count INTEGER NOT NULL DEFAULT 0,
                 is_complete INTEGER NOT NULL DEFAULT 0,
@@ -70,6 +71,10 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE anime ADD COLUMN title_photo_message_id INTEGER"
             )
+        if "status" not in columns:
+            self.conn.execute(
+                "ALTER TABLE anime ADD COLUMN status TEXT NOT NULL DEFAULT 'ongoing'"
+            )
 
     def upsert_chat(
         self,
@@ -99,6 +104,7 @@ class Database:
         anime_id: int,
         title: str,
         description: str,
+        status: str,
         title_photo_message_id: int | None,
         created_by: int,
     ) -> bool:
@@ -106,14 +112,15 @@ class Database:
             self.conn.execute(
                 """
                 INSERT INTO anime (
-                    anime_id, title, description, title_photo_message_id, created_by, created_at
+                    anime_id, title, description, status, title_photo_message_id, created_by, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     anime_id,
                     title,
                     description,
+                    status,
                     title_photo_message_id,
                     created_by,
                     utc_now_iso(),
@@ -139,6 +146,7 @@ class Database:
                 anime_id,
                 title,
                 description,
+                status,
                 title_photo_message_id,
                 episodes_count,
                 is_complete,

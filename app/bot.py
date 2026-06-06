@@ -24,6 +24,7 @@ from app.config import load_config, parse_chat_ref
 from app.database import Database
 from app.keyboards import (
     admin_menu_keyboard,
+    anime_status_keyboard,
     broadcast_target_keyboard,
     episode_navigation_keyboard,
     forced_subscription_keyboard,
@@ -63,6 +64,29 @@ CAPTION_COMPATIBLE_TYPES = {
     "video",
     "voice",
 }
+ANIME_STATUS_LABELS = {
+    "completed": "Tugagan",
+    "ongoing": "Ongoing",
+}
+ANIME_STATUS_INPUTS = {
+    "✅ tugagan": "completed",
+    "tugagan": "completed",
+    "yakunlangan": "completed",
+    "completed": "completed",
+    "🔄 ongoing": "ongoing",
+    "ongoing": "ongoing",
+    "davom etmoqda": "ongoing",
+}
+MEDIA_GROUP_COLLECT_DELAY = 1.2
+media_group_lock = asyncio.Lock()
+media_group_buffers: dict[tuple[int, str], dict[str, Any]] = {}
+anime_upload_locks: dict[int, asyncio.Lock] = {}
+
+
+def get_anime_upload_lock(anime_id: int) -> asyncio.Lock:
+    if anime_id not in anime_upload_locks:
+        anime_upload_locks[anime_id] = asyncio.Lock()
+    return anime_upload_locks[anime_id]
 
 
 class AdminFilter(BaseFilter):
@@ -124,10 +148,14 @@ def build_hashtag(value: str) -> str:
 
 
 def build_branding_lines(anime: Any) -> list[str]:
-    return [
+    lines = [
         f"{BOT_TAG} | {build_hashtag(anime['title'])}",
         f"🎬 <b>{anime['title']}</b>",
     ]
+    status = anime["status"] if "status" in anime.keys() else ""
+    if status:
+        lines.append(f"📌 Holat: <b>{ANIME_STATUS_LABELS.get(status, status)}</b>")
+    return lines
 
 
 def build_episode_text(anime: Any, episode_number: int) -> str:
@@ -368,18 +396,54 @@ async def anime_title_photo_handler(message: Message, state: FSMContext) -> None
         from_chat_id=message.chat.id,
         message_id=message.message_id,
     )
+    await state.update_data(title_photo_message_id=copied_message.message_id)
+    await state.set_state(AddAnimeStates.waiting_status)
+    await message.answer(
+        "📌 Anime holatini tanlang.\n"
+        "✅ Tugagan anime bo'lsa `Tugagan`, hali chiqayotgan bo'lsa `Ongoing` ni bosing.",
+        reply_markup=anime_status_keyboard(),
+    )
+
+
+@router.message(AddAnimeStates.waiting_status, admin_filter)
+async def anime_status_handler(message: Message, state: FSMContext) -> None:
+    track_chat(message.chat, message.from_user)
+    data = await state.get_data()
+    if message.text == "❌ Bekor qilish":
+        title_photo_message_id = data.get("title_photo_message_id")
+        if title_photo_message_id:
+            try:
+                await message.bot.delete_message(
+                    chat_id=config.storage_channel_id,
+                    message_id=title_photo_message_id,
+                )
+            except TelegramBadRequest:
+                pass
+        await state.clear()
+        await message.answer(
+            "❌ Anime qo'shish jarayoni bekor qilindi.",
+            reply_markup=admin_menu_keyboard(),
+        )
+        return
+
+    status = ANIME_STATUS_INPUTS.get((message.text or "").strip().lower())
+    if not status:
+        await message.answer("⚠️ Holatni `Tugagan` yoki `Ongoing` deb tanlang.")
+        return
+
     created = db.create_anime(
         anime_id=data["anime_id"],
         title=data["title"],
         description=data["description"],
-        title_photo_message_id=copied_message.message_id,
+        status=status,
+        title_photo_message_id=data["title_photo_message_id"],
         created_by=message.from_user.id,
     )
     if not created:
         try:
             await message.bot.delete_message(
                 chat_id=config.storage_channel_id,
-                message_id=copied_message.message_id,
+                message_id=data["title_photo_message_id"],
             )
         except TelegramBadRequest:
             pass
@@ -403,6 +467,7 @@ async def anime_done_text_handler(message: Message, state: FSMContext) -> None:
     track_chat(message.chat, message.from_user)
     data = await state.get_data()
     anime_id = data["anime_id"]
+    await wait_pending_media_group_uploads(anime_id)
     total = db.finalize_anime(anime_id)
     if total == 0:
         db.delete_anime(anime_id)
@@ -425,11 +490,100 @@ async def anime_cancel_text_handler(message: Message, state: FSMContext) -> None
     track_chat(message.chat, message.from_user)
     data = await state.get_data()
     anime_id = data["anime_id"]
+    await cancel_pending_media_group_uploads(anime_id)
     db.delete_anime(anime_id)
     await state.clear()
     await message.answer(
         "❌ Anime qo'shish jarayoni bekor qilindi.",
         reply_markup=admin_menu_keyboard(),
+    )
+
+
+async def wait_pending_media_group_uploads(anime_id: int) -> None:
+    while True:
+        async with media_group_lock:
+            tasks = [
+                buffer["task"]
+                for buffer in media_group_buffers.values()
+                if int(buffer["anime_id"]) == anime_id and "task" in buffer
+            ]
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def cancel_pending_media_group_uploads(anime_id: int) -> None:
+    async with media_group_lock:
+        keys = [
+            key
+            for key, buffer in media_group_buffers.items()
+            if int(buffer["anime_id"]) == anime_id
+        ]
+        tasks = [
+            media_group_buffers[key]["task"]
+            for key in keys
+            if "task" in media_group_buffers[key]
+        ]
+        for key in keys:
+            media_group_buffers.pop(key, None)
+
+    for task in tasks:
+        task.cancel()
+
+
+async def store_episode_message(message: Message, anime_id: int) -> int | None:
+    copied_message = await message.bot.copy_message(
+        chat_id=config.storage_channel_id,
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+    )
+    try:
+        return db.add_episode(
+            anime_id=anime_id,
+            storage_message_id=copied_message.message_id,
+            content_type=message.content_type,
+        )
+    except sqlite3.IntegrityError:
+        try:
+            await message.bot.delete_message(
+                chat_id=config.storage_channel_id,
+                message_id=copied_message.message_id,
+            )
+        except TelegramBadRequest:
+            pass
+        return None
+
+
+async def process_media_group_upload(key: tuple[int, str]) -> None:
+    await asyncio.sleep(MEDIA_GROUP_COLLECT_DELAY)
+    async with media_group_lock:
+        buffer = media_group_buffers.pop(key, None)
+
+    if not buffer:
+        return
+
+    anime_id = int(buffer["anime_id"])
+    messages = sorted(buffer["messages"].values(), key=lambda item: item.message_id)
+    saved_episode_numbers: list[int] = []
+    async with get_anime_upload_lock(anime_id):
+        for media_message in messages:
+            episode_number = await store_episode_message(media_message, anime_id)
+            if episode_number:
+                saved_episode_numbers.append(episode_number)
+
+    notify_message = messages[-1]
+    if not saved_episode_numbers:
+        await notify_message.answer(
+            "⚠️ Qismlar saqlanmadi. Fayllarni ketma-ket yoki 10 tadan bo'lib yuboring."
+        )
+        return
+
+    if len(saved_episode_numbers) == 1:
+        await notify_message.answer(f"✅ {saved_episode_numbers[0]}-qism saqlandi.")
+        return
+
+    await notify_message.answer(
+        f"✅ {saved_episode_numbers[0]}-{saved_episode_numbers[-1]}-qismlar tartib bilan saqlandi."
     )
 
 
@@ -442,25 +596,25 @@ async def anime_media_handler(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
-    copied_message = await message.bot.copy_message(
-        chat_id=config.storage_channel_id,
-        from_chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-    try:
-        episode_number = db.add_episode(
-            anime_id=data["anime_id"],
-            storage_message_id=copied_message.message_id,
-            content_type=content_type,
-        )
-    except sqlite3.IntegrityError:
-        try:
-            await message.bot.delete_message(
-                chat_id=config.storage_channel_id,
-                message_id=copied_message.message_id,
-            )
-        except TelegramBadRequest:
-            pass
+    anime_id = int(data["anime_id"])
+    if message.media_group_id:
+        key = (message.chat.id, message.media_group_id)
+        async with media_group_lock:
+            buffer = media_group_buffers.get(key)
+            if not buffer:
+                task = asyncio.create_task(process_media_group_upload(key))
+                buffer = {
+                    "anime_id": anime_id,
+                    "messages": {},
+                    "task": task,
+                }
+                media_group_buffers[key] = buffer
+            buffer["messages"][message.message_id] = message
+        return
+
+    async with get_anime_upload_lock(anime_id):
+        episode_number = await store_episode_message(message, anime_id)
+    if not episode_number:
         await message.answer(
             "⚠️ Qism saqlanmadi. Fayllarni ketma-ket yoki 10 tadan bo'lib yuboring."
         )
@@ -471,6 +625,7 @@ async def anime_media_handler(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("anime_done:"), admin_filter)
 async def anime_done_handler(callback: CallbackQuery, state: FSMContext) -> None:
     anime_id = int(callback.data.split(":")[1])
+    await wait_pending_media_group_uploads(anime_id)
     total = db.finalize_anime(anime_id)
     if total == 0:
         db.delete_anime(anime_id)
@@ -490,6 +645,7 @@ async def anime_done_handler(callback: CallbackQuery, state: FSMContext) -> None
 @router.callback_query(F.data.startswith("anime_cancel:"), admin_filter)
 async def anime_cancel_handler(callback: CallbackQuery, state: FSMContext) -> None:
     anime_id = int(callback.data.split(":")[1])
+    await cancel_pending_media_group_uploads(anime_id)
     db.delete_anime(anime_id)
     await state.clear()
     await callback.answer("❌ Jarayon bekor qilindi.")

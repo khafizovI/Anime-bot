@@ -50,6 +50,17 @@ def upload_control_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def anime_status_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Tugagan"), KeyboardButton(text="🔄 Ongoing")],
+            [KeyboardButton(text="❌ Bekor qilish")],
+        ],
+        resize_keyboard=True,
+        selective=True,
+    )
+
+
 def broadcast_target_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
