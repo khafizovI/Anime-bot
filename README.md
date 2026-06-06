@@ -1,4 +1,4 @@
-# AniLow
+# GGanime
 
 `aiogram` asosidagi Telegram anime bot.
 

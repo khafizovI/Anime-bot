@@ -43,8 +43,8 @@ config = load_config()
 db = Database(config.database_path)
 router = Router()
 
-BOT_NAME = "AniLow"
-BOT_TAG = "#AniLow"
+BOT_NAME = "GGanime"
+BOT_TAG = "#GGanime"
 
 EPISODE_CONTENT_TYPES = {
     "animation",
