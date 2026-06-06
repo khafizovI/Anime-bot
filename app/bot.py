@@ -148,27 +148,29 @@ def build_hashtag(value: str) -> str:
 
 
 def build_branding_lines(anime: Any) -> list[str]:
-    lines = [
-        f"{BOT_TAG} | {build_hashtag(anime['title'])}",
-        f"🎬 <b>{anime['title']}</b>",
-    ]
     status = anime["status"] if "status" in anime.keys() else ""
-    if status:
-        lines.append(f"📌 Holat: <b>{ANIME_STATUS_LABELS.get(status, status)}</b>")
+    status_label = ANIME_STATUS_LABELS.get(status, status) if status else ""
+    lines = [
+        f"🎬 {anime['title']}",
+        "",
+    ]
+    if status_label:
+        lines.extend([f"📌 Holat: {status_label}", ""])
+    lines.extend(
+        [
+            f"🆔 ID: {anime['anime_id']}",
+            "",
+            f"{BOT_TAG} | {build_hashtag(anime['title'])}",
+        ]
+    )
     return lines
 
 
 def build_episode_text(anime: Any, episode_number: int) -> str:
     description = (anime["description"] or "").strip()
     lines = build_branding_lines(anime)
-    lines.extend(
-        [
-            f"🆔 ID: <code>{anime['anime_id']}</code>",
-            f"🎞 Qism: {episode_number}/{anime['episodes_count']}",
-        ]
-    )
     if description:
-        lines.append("")
+        lines.extend(["", ""])
         lines.append(description)
     return "\n".join(lines)
 
@@ -176,9 +178,8 @@ def build_episode_text(anime: Any, episode_number: int) -> str:
 def build_title_photo_caption(anime: Any) -> str:
     description = (anime["description"] or "").strip()
     lines = build_branding_lines(anime)
-    lines.append(f"🆔 ID: <code>{anime['anime_id']}</code>")
     if description:
-        lines.append("")
+        lines.extend(["", ""])
         lines.append(description)
     return "\n".join(lines)
 
