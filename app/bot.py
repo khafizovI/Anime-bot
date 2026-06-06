@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -13,7 +14,7 @@ if __package__ in {None, ""}:
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramUnauthorizedError
 from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -40,6 +41,9 @@ logging.basicConfig(
 config = load_config()
 db = Database(config.database_path)
 router = Router()
+
+BOT_NAME = "AniLow"
+BOT_TAG = "#AniLow"
 
 EPISODE_CONTENT_TYPES = {
     "animation",
@@ -113,13 +117,28 @@ def normalize_subscription_input(raw: str) -> tuple[str, str | None]:
     raise ValueError("Faqat @username, public t.me link yoki numeric chat ID yuboring.")
 
 
+def build_hashtag(value: str) -> str:
+    cleaned = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    parts = [part for part in cleaned.split() if part]
+    return f"#{'_'.join(parts)}" if parts else BOT_TAG
+
+
+def build_branding_lines(anime: Any) -> list[str]:
+    return [
+        f"{BOT_TAG} | {build_hashtag(anime['title'])}",
+        f"🎬 <b>{anime['title']}</b>",
+    ]
+
+
 def build_episode_text(anime: Any, episode_number: int) -> str:
     description = (anime["description"] or "").strip()
-    lines = [
-        f"🎬 <b>{anime['title']}</b>",
-        f"🆔 ID: <code>{anime['anime_id']}</code>",
-        f"🎞 Qism: {episode_number}/{anime['episodes_count']}",
-    ]
+    lines = build_branding_lines(anime)
+    lines.extend(
+        [
+            f"🆔 ID: <code>{anime['anime_id']}</code>",
+            f"🎞 Qism: {episode_number}/{anime['episodes_count']}",
+        ]
+    )
     if description:
         lines.append("")
         lines.append(description)
@@ -128,10 +147,8 @@ def build_episode_text(anime: Any, episode_number: int) -> str:
 
 def build_title_photo_caption(anime: Any) -> str:
     description = (anime["description"] or "").strip()
-    lines = [
-        f"🎬 <b>{anime['title']}</b>",
-        f"🆔 ID: <code>{anime['anime_id']}</code>",
-    ]
+    lines = build_branding_lines(anime)
+    lines.append(f"🆔 ID: <code>{anime['anime_id']}</code>")
     if description:
         lines.append("")
         lines.append(description)
@@ -162,7 +179,7 @@ async def ensure_subscription(bot: Bot, user_id: int, target_message: Message | 
         return True
 
     prompt = (
-        "🔐 Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling, "
+        f"🔐 {BOT_NAME} dan foydalanish uchun quyidagi kanallarga obuna bo'ling, "
         "so'ng `Tekshirish` tugmasini bosing."
     )
     keyboard = forced_subscription_keyboard(unresolved)
@@ -261,6 +278,7 @@ async def start_handler(message: Message) -> None:
 
     await message.answer(
         f"👋 Salom, {message.from_user.full_name}!\n\n"
+        f"{BOT_TAG} ga xush kelibsiz.\n"
         "🎬 Anime ID yuboring.\n"
         "🔎 Masalan: <code>1001</code>"
     )
@@ -271,7 +289,7 @@ async def admin_command_handler(message: Message, state: FSMContext) -> None:
     track_chat(message.chat, message.from_user)
     await state.clear()
     await message.answer(
-        "🛠 Admin panel ochildi.",
+        f"🛠 {BOT_NAME} admin panel ochildi.",
         reply_markup=admin_menu_keyboard(),
     )
 
@@ -659,7 +677,7 @@ async def subscription_check_handler(callback: CallbackQuery) -> None:
         return
 
     await callback.answer("✅ Obuna tasdiqlandi.", show_alert=True)
-    await callback.message.answer("🎬 Endi anime ID yuborishingiz mumkin.")
+    await callback.message.answer(f"🎬 Endi {BOT_NAME} uchun anime ID yuborishingiz mumkin.")
 
 
 @router.callback_query(F.data == "episode:noop")
@@ -703,7 +721,7 @@ async def fallback_handler(message: Message) -> None:
     track_chat(message.chat, message.from_user)
     if message.chat.type != "private":
         return
-    await message.answer("🎬 Anime ID yuboring.")
+    await message.answer(f"{BOT_TAG}\n🎬 Anime ID yuboring.")
 
 
 async def main() -> None:
@@ -714,8 +732,30 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    await dp.start_polling(bot, skip_updates=True)
+    try:
+        me = await bot.me()
+    except TelegramUnauthorizedError:
+        logging.error(
+            "%s tokeni noto'g'ri yoki bekor qilingan. .env ichidagi BOT_TOKEN ni yangilang.",
+            BOT_NAME,
+        )
+        return
+
+    logging.info("%s ishga tushdi: @%s", BOT_NAME, me.username)
+    try:
+        await dp.start_polling(bot, skip_updates=True)
+    except asyncio.CancelledError:
+        logging.info("%s polling to'xtatildi.", BOT_NAME)
+    finally:
+        await bot.session.close()
+
+
+def run() -> None:
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("%s to'xtatildi.", BOT_NAME)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

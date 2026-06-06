@@ -1,4 +1,4 @@
-# Anime Bot
+# AniLow
 
 `aiogram` asosidagi Telegram anime bot.
 
@@ -39,5 +39,7 @@ pip install -r requirements.txt
 ## Ishga tushirish
 
 ```bash
-python -m app.bot
+python bot.py
 ```
+
+`BOT_TOKEN` noto'g'ri bo'lsa bot endi tushunarli log bilan to'xtaydi.
