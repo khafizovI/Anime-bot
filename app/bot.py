@@ -30,6 +30,7 @@ from app.keyboards import (
     forced_subscription_keyboard,
     subscription_manage_keyboard,
     upload_control_keyboard,
+    watch_anime_keyboard,
 )
 from app.states import AddAnimeStates, BroadcastStates, DeleteAnimeStates, SubscriptionStates
 
@@ -45,6 +46,7 @@ router = Router()
 
 BOT_NAME = "GGanime"
 BOT_TAG = "#GGanime"
+ANIME_ANNOUNCEMENT_CHANNEL_ID = -1004216105805
 
 EPISODE_CONTENT_TYPES = {
     "animation",
@@ -184,6 +186,10 @@ def build_title_photo_caption(anime: Any) -> str:
     return "\n".join(lines)
 
 
+def build_anime_watch_url(bot_username: str, anime_id: int) -> str:
+    return f"https://t.me/{bot_username}?start={anime_id}"
+
+
 async def ensure_subscription(bot: Bot, user_id: int, target_message: Message | CallbackQuery) -> bool:
     if is_admin(user_id):
         return True
@@ -230,6 +236,32 @@ async def send_title_photo(bot: Bot, chat_id: int, anime_id: int) -> None:
         message_id=anime["title_photo_message_id"],
         caption=build_title_photo_caption(anime),
     )
+
+
+async def publish_anime_announcement(bot: Bot, anime_id: int) -> bool:
+    anime = db.get_anime(anime_id)
+    if not anime or not anime["title_photo_message_id"]:
+        return False
+    if anime["announcement_message_id"]:
+        return True
+
+    me = await bot.get_me()
+    if not me.username:
+        return False
+
+    try:
+        announcement = await bot.copy_message(
+            chat_id=ANIME_ANNOUNCEMENT_CHANNEL_ID,
+            from_chat_id=config.storage_channel_id,
+            message_id=anime["title_photo_message_id"],
+            caption=build_title_photo_caption(anime),
+            reply_markup=watch_anime_keyboard(build_anime_watch_url(me.username, anime_id)),
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logging.exception("Anime announcement kanalga yuborilmadi: %s", anime_id)
+        return False
+    db.set_anime_announcement_message_id(anime_id, announcement.message_id)
+    return True
 
 
 async def delete_anime_assets(bot: Bot, anime_id: int) -> None:
@@ -480,8 +512,10 @@ async def anime_done_text_handler(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
+    announced = await publish_anime_announcement(message.bot, anime_id)
+    announcement_text = "\n📢 Kanalga tashlandi." if announced else "\n⚠️ Kanalga tashlanmadi."
     await message.answer(
-        f"✅ Anime saqlandi.\n🆔 ID: <code>{anime_id}</code>\n🎞 Jami qism: <b>{total}</b>",
+        f"✅ Anime saqlandi.\n🆔 ID: <code>{anime_id}</code>\n🎞 Jami qism: <b>{total}</b>{announcement_text}",
         reply_markup=admin_menu_keyboard(),
     )
 
@@ -636,9 +670,11 @@ async def anime_done_handler(callback: CallbackQuery, state: FSMContext) -> None
         return
 
     await state.clear()
+    announced = await publish_anime_announcement(callback.message.bot, anime_id)
+    announcement_text = "\n📢 Kanalga tashlandi." if announced else "\n⚠️ Kanalga tashlanmadi."
     await callback.answer("✅ Anime yakunlandi.")
     await callback.message.answer(
-        f"✅ Anime saqlandi.\n🆔 ID: <code>{anime_id}</code>\n🎞 Jami qism: <b>{total}</b>",
+        f"✅ Anime saqlandi.\n🆔 ID: <code>{anime_id}</code>\n🎞 Jami qism: <b>{total}</b>{announcement_text}",
         reply_markup=admin_menu_keyboard(),
     )
 

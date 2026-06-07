@@ -35,6 +35,7 @@ class Database:
                 description TEXT,
                 status TEXT NOT NULL DEFAULT 'ongoing',
                 title_photo_message_id INTEGER,
+                announcement_message_id INTEGER,
                 episodes_count INTEGER NOT NULL DEFAULT 0,
                 is_complete INTEGER NOT NULL DEFAULT 0,
                 created_by INTEGER,
@@ -74,6 +75,10 @@ class Database:
         if "status" not in columns:
             self.conn.execute(
                 "ALTER TABLE anime ADD COLUMN status TEXT NOT NULL DEFAULT 'ongoing'"
+            )
+        if "announcement_message_id" not in columns:
+            self.conn.execute(
+                "ALTER TABLE anime ADD COLUMN announcement_message_id INTEGER"
             )
 
     def upsert_chat(
@@ -148,6 +153,7 @@ class Database:
                 description,
                 status,
                 title_photo_message_id,
+                announcement_message_id,
                 episodes_count,
                 is_complete,
                 created_by,
@@ -163,6 +169,21 @@ class Database:
             "SELECT * FROM anime WHERE anime_id = ?",
             (anime_id,),
         ).fetchone()
+
+    def set_anime_announcement_message_id(
+        self,
+        anime_id: int,
+        announcement_message_id: int,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE anime
+            SET announcement_message_id = ?
+            WHERE anime_id = ?
+            """,
+            (announcement_message_id, anime_id),
+        )
+        self.conn.commit()
 
     def get_anime_storage_message_ids(self, anime_id: int) -> list[int]:
         message_ids: list[int] = []

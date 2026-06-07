@@ -61,6 +61,14 @@ def anime_status_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def watch_anime_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Tomosha qilish", url=url)],
+        ]
+    )
+
+
 def broadcast_target_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
